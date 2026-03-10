@@ -1,0 +1,342 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WatchBot - AI 工作状态监控</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      min-height: 100vh;
+      color: #f1f5f9;
+    }
+    .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+    
+    header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 2rem;
+    }
+    h1 { font-size: 2rem; display: flex; align-items: center; gap: 0.5rem; }
+    .logo { color: #34d399; }
+    
+    .controls { display: flex; gap: 1rem; align-items: center; }
+    button {
+      padding: 0.5rem 1rem;
+      border-radius: 0.5rem;
+      border: 1px solid #475569;
+      background: #334155;
+      color: #cbd5e1;
+      cursor: pointer;
+      font-size: 0.875rem;
+      transition: all 0.2s;
+    }
+    button:hover { background: #475569; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    
+    .toggle {
+      display: flex; align-items: center; gap: 0.5rem;
+      background: #334155; padding: 0.5rem 1rem; border-radius: 0.5rem;
+    }
+    .toggle-switch {
+      width: 40px; height: 20px; background: #475569; border-radius: 10px;
+      position: relative; cursor: pointer; transition: background 0.2s;
+    }
+    .toggle-switch.active { background: #34d399; }
+    .toggle-switch::after {
+      content: ''; position: absolute; width: 16px; height: 16px;
+      background: white; border-radius: 50%; top: 2px; left: 2px;
+      transition: transform 0.2s;
+    }
+    .toggle-switch.active::after { transform: translateX(20px); }
+    
+    .stats-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 1rem; margin-bottom: 2rem;
+    }
+    .stat-card {
+      background: #1e293b; border: 1px solid #334155; border-radius: 0.75rem;
+      padding: 1.25rem;
+    }
+    .stat-card h3 { color: #94a3b8; font-size: 0.875rem; font-weight: 500; margin-bottom: 0.5rem; }
+    .stat-card .value { font-size: 1.5rem; font-weight: 700; }
+    .stat-card .sub { font-size: 0.75rem; color: #64748b; margin-top: 0.25rem; }
+    
+    .status-active { color: #34d399; }
+    .status-normal { color: #60a5fa; }
+    .status-distract { color: #fbbf24; }
+    .status-rest { color: #94a3b8; }
+    
+    .progress-bar {
+      width: 100%; height: 8px; background: #334155; border-radius: 4px;
+      margin-top: 0.5rem; overflow: hidden;
+    }
+    .progress-fill { height: 100%; background: #34d399; border-radius: 4px; transition: width 0.3s; }
+    
+    .card {
+      background: #1e293b; border: 1px solid #334155; border-radius: 0.75rem;
+      padding: 1.5rem; margin-bottom: 1.5rem;
+    }
+    .card h2 { font-size: 1.125rem; margin-bottom: 1rem; }
+    
+    .history-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 0.75rem; background: #0f172a50; border-radius: 0.5rem; margin-bottom: 0.5rem;
+    }
+    .history-item .activity { display: flex; align-items: center; gap: 0.5rem; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot-green { background: #34d399; }
+    .dot-blue { background: #60a5fa; }
+    .dot-yellow { background: #fbbf24; }
+    .dot-gray { background: #94a3b8; }
+    .history-item .info { display: flex; gap: 1.5rem; align-items: center; font-size: 0.875rem; }
+    .history-item .time { color: #64748b; }
+    
+    .suggestions { display: flex; flex-direction: column; gap: 0.75rem; }
+    .suggestion {
+      padding: 0.75rem; background: #34d39915; border: 1px solid #34d39930;
+      border-radius: 0.5rem; color: #6ee7b7; font-size: 0.875rem;
+    }
+    
+    .loading { text-align: center; padding: 2rem; color: #64748b; }
+    .error { background: #dc262615; border: 1px solid #dc2626; padding: 1rem; border-radius: 0.5rem; color: #f87171; margin-bottom: 1rem; }
+    
+    .tabs { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; }
+    .tab {
+      padding: 0.5rem 1rem; border-radius: 0.5rem; background: #334155;
+      color: #cbd5e1; border: none; cursor: pointer;
+    }
+    .tab.active { background: #475569; }
+    
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1><span class="logo">◉</span> WatchBot</h1>
+      <div class="controls">
+        <button id="captureBtn">📸 立即截屏</button>
+        <div class="toggle">
+          <span id="statusText">已暂停</span>
+          <div class="toggle-switch" id="monitorToggle"></div>
+        </div>
+      </div>
+    </header>
+    
+    <div id="error" class="error" style="display:none"></div>
+    
+    <div class="stats-grid">
+      <div class="stat-card">
+        <h3>当前状态</h3>
+        <div class="value" id="currentStatus">-</div>
+        <div class="sub" id="currentActivity">等待数据</div>
+      </div>
+      <div class="stat-card">
+        <h3>效率评分</h3>
+        <div class="value" id="productivity">-</div>
+        <div class="progress-bar"><div class="progress-fill" id="productivityBar" style="width:0%"></div></div>
+      </div>
+      <div class="stat-card">
+        <h3>今日记录</h3>
+        <div class="value" id="todayRecords">0</div>
+        <div class="sub">平均效率 <span id="avgProductivity">0</span>%</div>
+      </div>
+      <div class="stat-card">
+        <h3>最后截屏</h3>
+        <div class="value" style="font-size:1rem" id="lastCapture">尚未截屏</div>
+        <div class="sub">共 <span id="totalHours">0</span> 小时数据</div>
+      </div>
+    </div>
+    
+    <div class="tabs">
+      <button class="tab active" data-tab="dashboard">仪表盘</button>
+      <button class="tab" data-tab="history">历史记录</button>
+      <button class="tab" data-tab="insights">优化建议</button>
+    </div>
+    
+    <div class="tab-content active" id="tab-dashboard">
+      <div class="card">
+        <h2>最近活动</h2>
+        <div id="recentHistory">
+          <div class="loading">加载中...</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="tab-content" id="tab-history">
+      <div class="card">
+        <h2>历史记录</h2>
+        <div id="fullHistory">
+          <div class="loading">加载中...</div>
+        </div>
+      </div>
+    </div>
+    
+    <div class="tab-content" id="tab-insights">
+      <div class="card">
+        <h2>整体评估</h2>
+        <div id="overall" class="loading">加载中...</div>
+      </div>
+      <div class="card">
+        <h2>优化建议</h2>
+        <div class="suggestions" id="suggestions">
+          <div class="loading">加载中...</div>
+        </div>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    const API = 'http://localhost:3001/api';
+    let monitoring = false;
+    
+    function getStatusClass(status) {
+      if (status === '高效工作') return 'status-active';
+      if (status === '普通工作') return 'status-normal';
+      if (status === '轻微分心') return 'status-distract';
+      return 'status-rest';
+    }
+    
+    function getDotClass(status) {
+      if (status === '高效工作') return 'dot-green';
+      if (status === '普通工作') return 'dot-blue';
+      if (status === '轻微分心') return 'dot-yellow';
+      return 'dot-gray';
+    }
+    
+    async function fetchJSON(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(res.statusText);
+      return res.json();
+    }
+    
+    async function loadData() {
+      try {
+        const [status, insights] = await Promise.all([
+          fetchJSON(API + '/status'),
+          fetchJSON(API + '/insights')
+        ]);
+        
+        monitoring = status.monitoring;
+        document.getElementById('monitorToggle').classList.toggle('active', monitoring);
+        document.getElementById('statusText').textContent = monitoring ? '监控中' : '已暂停';
+        
+        if (status.currentStatus) {
+          document.getElementById('currentStatus').textContent = status.currentStatus.status;
+          document.getElementById('currentStatus').className = 'value ' + getStatusClass(status.currentStatus.status);
+          document.getElementById('currentActivity').textContent = status.currentStatus.activity;
+          document.getElementById('productivity').textContent = status.currentStatus.productivity;
+          document.getElementById('productivityBar').style.width = status.currentStatus.productivity + '%';
+        }
+        
+        document.getElementById('todayRecords').textContent = insights.stats.todayRecords;
+        document.getElementById('avgProductivity').textContent = insights.stats.avgProductivity;
+        document.getElementById('totalHours').textContent = insights.stats.totalHours.toFixed(1);
+        
+        if (status.lastCapture) {
+          document.getElementById('lastCapture').textContent = new Date(status.lastCapture).toLocaleTimeString('zh-CN');
+        }
+        
+        // Load history
+        const history = await fetchJSON(API + '/history?limit=20');
+        renderHistory(history.records);
+        
+        // Load insights
+        renderInsights(insights);
+        
+        document.getElementById('error').style.display = 'none';
+      } catch (e) {
+        document.getElementById('error').textContent = '连接失败: ' + e.message;
+        document.getElementById('error').style.display = 'block';
+      }
+    }
+    
+    function renderHistory(records) {
+      const html = records.slice().reverse().map(r => `
+        <div class="history-item">
+          <div class="activity">
+            <span class="dot ${getDotClass(r.status)}"></span>
+            <span>${r.activity}</span>
+          </div>
+          <div class="info">
+            <span class="${getStatusClass(r.status)}">${r.status}</span>
+            <span class="time">${new Date(r.timestamp).toLocaleTimeString('zh-CN')}</span>
+          </div>
+        </div>
+      `).join('');
+      
+      document.getElementById('recentHistory').innerHTML = html || '<div class="loading">暂无记录</div>';
+      document.getElementById('fullHistory').innerHTML = html || '<div class="loading">暂无记录</div>';
+    }
+    
+    function renderInsights(data) {
+      const trendIcon = data.insights.trend === 'up' ? '↗' : data.insights.trend === 'down' ? '↘' : '→';
+      const trendText = data.insights.trend === 'up' ? '上升' : data.insights.trend === 'down' ? '下降' : '稳定';
+      
+      document.getElementById('overall').innerHTML = `
+        <div style="display:flex;align-items:center;gap:1rem">
+          <span style="font-size:2rem">${trendIcon}</span>
+          <div>
+            <div style="font-size:1.5rem;font-weight:bold">${data.insights.overall}</div>
+            <div style="color:#64748b">趋势: ${trendText}</div>
+          </div>
+        </div>
+        <div style="margin-top:1rem">
+          <div style="color:#64748b;font-size:0.875rem">效率评分</div>
+          <div class="progress-bar"><div class="progress-fill" style="width:${data.stats.avgProductivity}%"></div></div>
+        </div>
+      `;
+      
+      document.getElementById('suggestions').innerHTML = data.insights.suggestions.length 
+        ? data.insights.suggestions.map(s => `<div class="suggestion">${s}</div>`).join('')
+        : '<div class="loading">收集更多数据以获得建议</div>';
+    }
+    
+    document.getElementById('captureBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('captureBtn');
+      btn.disabled = true;
+      btn.textContent = '截屏中...';
+      try {
+        await fetchJSON(API + '/screenshot', { method: 'POST' });
+        await loadData();
+      } catch (e) {
+        alert('截屏失败: ' + e.message);
+      }
+      btn.disabled = false;
+      btn.textContent = '📸 立即截屏';
+    });
+    
+    document.getElementById('monitorToggle').addEventListener('click', async () => {
+      try {
+        await fetchJSON(API + '/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ monitoring: !monitoring })
+        });
+        monitoring = !monitoring;
+        document.getElementById('monitorToggle').classList.toggle('active', monitoring);
+        document.getElementById('statusText').textContent = monitoring ? '监控中' : '已暂停';
+      } catch (e) {
+        alert('设置失败: ' + e.message);
+      }
+    });
+    
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+      });
+    });
+    
+    loadData();
+    setInterval(loadData, 5000);
+  </script>
+</body>
+</html>

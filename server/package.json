@@ -1,0 +1,17 @@
+{
+  "name": "watchbot-server",
+  "version": "1.0.0",
+  "description": "AI Work Status Monitor - Server",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "cors": "^2.8.5",
+    "express-rate-limit": "^7.1.5",
+    "screenshot-desktop": "^1.15.0",
+    "date-fns": "^3.3.1"
+  }
+}
