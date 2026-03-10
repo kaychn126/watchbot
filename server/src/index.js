@@ -35,6 +35,7 @@ db.exec(`
     screenshot_file TEXT,
     detail TEXT,
     focus_score INTEGER,
+    focus_factors TEXT,
     created_at TEXT DEFAULT CURRENT_TIMESTAMP
   );
 
@@ -58,7 +59,6 @@ db.exec(`
   );
 
   CREATE INDEX IF NOT EXISTS idx_timestamp ON work_records(timestamp);
-  CREATE INDEX IF NOT EXISTS idx_session_end ON session_summary(end_time);
 `);
 
 const defaultSettings = {
@@ -90,14 +90,217 @@ if (!fs.existsSync(CONFIG.screenshotDir)) {
 let monitorInterval = null;
 let sessionStartTime = null;
 
+// ==================== 科学的专注度计算 ====================
+
+// 简易图像相似度计算 (使用像素采样对比)
+function calculateImageSimilarity(img1Path, img2Path) {
+  try {
+    // 读取两个图片文件，对比像素
+    const img1 = fs.readFileSync(img1Path);
+    const img2 = fs.readFileSync(img2Path);
+    
+    // 取样比较：每50个像素比对一次
+    const sampleSize = Math.min(img1.length, img2.length, 10000);
+    let samePixels = 0;
+    let totalSamples = 0;
+    
+    for (let i = 0; i < sampleSize; i += 50) {
+      if (img1[i] !== undefined && img2[i] !== undefined) {
+        // 只比对非零的像素(去除大部分空白区域)
+        if (img1[i] > 10 || img2[i] > 10) {
+          totalSamples++;
+          // 差异小于5%视为相似
+          if (Math.abs(img1[i] - img2[i]) < 10) {
+            samePixels++;
+          }
+        }
+      }
+    }
+    
+    if (totalSamples === 0) return 0.9; // 都是空白区域->相似
+    return samePixels / totalSamples;
+  } catch (e) {
+    return 0.5; // 无法比较时返回中间值
+  }
+}
+
+// 专注度计算器
+class FocusCalculator {
+  constructor() {
+    this.lastScreenshot = null;
+    this.lastScreenshotTime = null;
+    this.activityHistory = []; // 最近的活动历史
+    this.maxHistory = 20;
+    
+    // 工作时段定义 (小时)
+    this.workHours = { start: 9, end: 18 };
+  }
+
+  // 计算专注度分数
+  calculate(screenshot, currentActivity, timestamp) {
+    let focusScore = 70; // 基础分数
+    const factors = [];
+    
+    // 1️⃣ 屏幕变化率 (权重: 40%)
+    // 如果屏幕内容变化很大，可能在切换应用 -> 降低专注度
+    const changeRate = this.analyzeScreenChange(screenshot);
+    if (changeRate !== null) {
+      // 变化率低 = 专注 (分数高)
+      // 变化率高 = 分心 (分数低)
+      const screenFocus = Math.round(changeRate * 100);
+      focusScore = Math.round(focusScore * 0.4 + screenFocus * 0.6);
+      factors.push(`屏幕变化率: ${Math.round((1-changeRate)*100)}%`);
+    }
+    
+    // 2️⃣ 任务连续性 (权重: 30%)
+    // 如果长时间做同一件事，专注度高
+    const continuityScore = this.analyzeContinuity(currentActivity, timestamp);
+    focusScore = Math.round(focusScore * 0.3 + continuityScore * 0.7);
+    factors.push(`任务连续: ${continuityScore > 80 ? '高' : continuityScore > 50 ? '中' : '低'}`);
+    
+    // 3️⃣ 工作时段 (权重: 20%)
+    // 在工作时间更可能专注工作
+    const hourWorkScore = this.analyzeTimeOfDay();
+    focusScore = Math.round(focusScore * 0.2 + hourWorkScore * 0.8);
+    factors.push(`时段: ${hourWorkScore > 80 ? '工作时段' : '业余时间'}`);
+    
+    // 4️⃣ 分心检测 (权重: 10%)
+    // 检测是否在做与工作无关的事
+    const distractionPenalty = this.detectDistraction(currentActivity);
+    focusScore = Math.max(0, focusScore - distractionPenalty);
+    
+    // 限制范围
+    focusScore = Math.max(10, Math.min(100, focusScore));
+    
+    return { focusScore, factors };
+  }
+
+  // 分析屏幕变化
+  analyzeScreenChange(newScreenshot) {
+    try {
+      if (!this.lastScreenshot || !this.lastScreenshotTime) {
+        // 首次记录
+        return null;
+      }
+      
+      // 对比两张截图
+      const similarity = calculateImageSimilarity(this.lastScreenshot, newScreenshot);
+      
+      // 保存当前截图供下次使用
+      this.updateLastScreenshot(newScreenshot);
+      
+      // 相似度高 = 变化少 = 专注
+      // 相似度低 = 变化多 = 可能切换应用
+      return similarity > 0.8 ? 0.9 : (similarity > 0.5 ? 0.7 : 0.4);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  updateLastScreenshot(newPath) {
+    this.lastScreenshot = newPath;
+    this.lastScreenshotTime = Date.now();
+  }
+
+  // 分析任务连续性
+  analyzeContinuity(activity, timestamp) {
+    const now = Date.now();
+    
+    // 提取纯活动名 (去除emoji)
+    const cleanActivity = activity.replace(/[🖥️📝💼🌐📧☕🎮📺]/g, '').trim();
+    
+    // 添加到历史
+    this.activityHistory.push({
+      activity: cleanActivity,
+      timestamp: now
+    });
+    
+    // 保持历史长度
+    if (this.activityHistory.length > this.maxHistory) {
+      this.activityHistory.shift();
+    }
+    
+    if (this.activityHistory.length < 3) {
+      return 70; // 历史数据不足
+    }
+    
+    // 计算最近几次活动中相同活动的比例
+    const recent = this.activityHistory.slice(-5);
+    const sameActivity = recent.filter(a => a.activity === cleanActivity).length;
+    const continuity = (sameActivity / recent.length) * 100;
+    
+    // 计算平均任务持续时间
+    let totalDuration = 0;
+    let switches = 0;
+    for (let i = 1; i < recent.length; i++) {
+      if (recent[i].activity !== recent[i-1].activity) {
+        switches++;
+      }
+    }
+    
+    // 切换次数越少越好
+    const switchPenalty = Math.min(30, switches * 10);
+    
+    return Math.max(20, Math.min(100, continuity - switchPenalty + 50));
+  }
+
+  // 分析时段
+  analyzeTimeOfDay() {
+    const hour = new Date().getHours();
+    
+    // 工作时段效率高
+    if (hour >= this.workHours.start && hour < this.workHours.end) {
+      return 90;
+    }
+    // 早晨和晚上也可能工作
+    if ((hour >= 7 && hour < 9) || (hour >= 18 && hour < 22)) {
+      return 70;
+    }
+    // 深夜和凌晨
+    return 40;
+  }
+
+  // 检测是否分心
+  detectDistraction(activity) {
+    const distractions = ['浏览器浏览', '浏览器', '休息', '游戏', '视频', '社交'];
+    const highFocus = ['Coding', '代码', '文档', '会议', '邮件'];
+    
+    const cleanActivity = activity.replace(/[🖥️📝💼🌐📧☕🎮📺]/g, '').trim();
+    
+    for (const d of distractions) {
+      if (cleanActivity.includes(d)) {
+        return 20; // 扣20分
+      }
+    }
+    
+    for (const h of highFocus) {
+      if (cleanActivity.includes(h)) {
+        return -5; // 加5分
+      }
+    }
+    
+    return 0;
+  }
+}
+
+const focusCalculator = new FocusCalculator();
+
+// ==================== END ====================
+
 const ANALYSIS_PROMPT = `你是一个专业的工作效率分析师。请仔细分析用户当前屏幕截图，评估工作状态。
 
 请从以下维度进行分析：
 1. **当前活动 (activity)**: 具体在做什么
 2. **工作状态 (status)**: 高效工作/普通工作/严重分心/休息中
-3. **专注度评分 (focus_score)**: 0-100
+3. **专注度评分 (focus_score)**: 0-100 (越高越好)
 4. **详细描述 (detail)**: 15-30字，包含持续时间、产出、建议
 5. **效率分数 (productivity)**: 0-100
+
+注意：计算 focus_score 时考虑：
+- 屏幕内容变化频率（变化少=专注）
+- 任务连续性（长时间做同一件事=专注）
+- 工作时段（工作时间更专注）
+- 是否在做与工作无关的事
 
 只返回JSON:
 {"status":"状态","activity":"活动","focus_score":专注度,"detail":"详细描述","productivity":效率}`;
@@ -161,25 +364,18 @@ function generateMockAnalysis() {
   };
 }
 
-// 生成会话总结
 function generateSessionSummary(startTime, endTime) {
   const start = new Date(startTime);
   const end = new Date(endTime);
   const durationMinutes = Math.round((end - start) / 60000);
   
-  // 获取本次会话的所有记录
-  const records = db.prepare(
-    'SELECT * FROM work_records WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp'
-  ).all(startTime, endTime);
+  const records = db.prepare('SELECT * FROM work_records WHERE timestamp >= ? AND timestamp <= ? ORDER BY timestamp').all(startTime, endTime);
   
-  if (records.length === 0) {
-    return null;
-  }
+  if (records.length === 0) return null;
   
   const avgProductivity = Math.round(records.reduce((sum, r) => sum + r.productivity, 0) / records.length);
   const avgFocus = Math.round(records.reduce((sum, r) => sum + (r.focus_score || r.productivity), 0) / records.length);
   
-  // 统计主要活动
   const activityCount = {};
   records.forEach(r => {
     const act = r.activity.replace(/[🖥️📝💼🌐📧☕]/g, '').trim();
@@ -187,51 +383,27 @@ function generateSessionSummary(startTime, endTime) {
   });
   const mainActivity = Object.entries(activityCount).sort((a, b) => b[1] - a[1])[0];
   
-  // 生成总结文案
   let summary = '';
-  let suggestions = '';
-  
   if (durationMinutes < 5) {
-    summary = `本次工作时长 ${durationMinutes} 分钟，记录 ${records.length} 条`;
-  } else if (avgProductivity >= 80) {
-    summary = `本次工作 ${durationMinutes} 分钟，平均效率 ${avgProductivity}%，专注度 ${avgFocus}%，状态优秀！`;
-  } else if (avgProductivity >= 60) {
-    summary = `本次工作 ${durationMinutes} 分钟，平均效率 ${avgProductivity}%，状态良好`;
+    summary = `本次工作 ${durationMinutes} 分钟，记录 ${records.length} 条`;
+  } else if (avgFocus >= 80) {
+    summary = `本次工作 ${durationMinutes} 分钟，平均专注度 ${avgFocus}%，效率 ${avgProductivity}%，状态优秀！`;
+  } else if (avgFocus >= 60) {
+    summary = `本次工作 ${durationMinutes} 分钟，平均专注度 ${avgFocus}%，状态良好`;
   } else {
-    summary = `本次工作 ${durationMinutes} 分钟，平均效率 ${avgProductivity}%，有提升空间`;
+    summary = `本次工作 ${durationMinutes} 分钟，专注度偏低 (${avgFocus}%)，建议减少干扰`;
   }
   
   if (mainActivity) {
-    summary += `。主要活动为「${mainActivity[0]}」，持续了约 ${Math.round(mainActivity[1] * 5)} 分钟`;
+    summary += `。主要活动为「${mainActivity[0]}」`;
   }
   
-  // 生成建议
   const suggestionsList = [];
-  if (avgFocus < 70) {
-    suggestionsList.push('专注度偏低，建议减少应用切换');
-  }
-  if (records.length > 0) {
-    const focusTrend = records.slice(-5);
-    const trend = focusTrend.reduce((sum, r) => sum + (r.focus_score || r.productivity), 0) / focusTrend.length;
-    if (trend > avgFocus + 5) {
-      suggestionsList.push('后期专注度有所提升，继续保持');
-    } else if (trend < avgFocus - 5) {
-      suggestionsList.push('注意后期有些疲劳，可以适当休息');
-    }
-  }
-  if (avgProductivity >= 80) {
-    suggestionsList.push('工作效率很高，保持当前状态');
-  } else if (avgProductivity < 60) {
-    suggestionsList.push('建议尝试番茄工作法提升效率');
-  }
+  if (avgFocus < 70) suggestionsList.push('专注度偏低，建议减少应用切换');
+  if (avgFocus >= 80) suggestionsList.push('工作效率很高，保持当前状态');
+  if (avgFocus < 60) suggestionsList.push('建议尝试番茄工作法');
   
-  const lastRecord = records[records.length - 1];
-  if (lastRecord && lastRecord.detail) {
-    suggestionsList.push(`最后：${lastRecord.detail}`);
-  }
-  
-  suggestions = suggestionsList.join('；');
-  if (!suggestions) suggestions = '继续加油！';
+  const suggestions = suggestionsList.join('；') || '继续加油！';
   
   return {
     start_time: startTime,
@@ -252,7 +424,7 @@ function generateInsights() {
   if (records.length < 5) {
     return {
       overall: '数据收集中...',
-      suggestions: ['继续工作，系统正在学习您的工作模式'],
+      suggestions: ['继续工作，系统正在学习'],
       trend: 'stable'
     };
   }
@@ -267,45 +439,25 @@ function generateInsights() {
   });
   const topActivity = Object.entries(activityCount).sort((a, b) => b[1] - a[1])[0];
   
-  const lowFocusCount = records.filter(r => (r.focus_score || r.productivity) < 70).length;
-  const hasFocusIssue = lowFocusCount > records.length * 0.3;
+  const lowFocusCount = records.filter(r => (r.focus_score || r.productivity) < 60).length;
   
   const hour = new Date().getHours();
   
   const insights = {
-    overall: '',
+    overall: avgFocus >= 80 ? `✨ 专注度优秀 ${avgFocus}%！` : avgFocus >= 60 ? `📊 专注度良好 ${avgFocus}%` : `⚠️ 专注度偏低 ${avgFocus}%`,
     suggestions: [],
-    trend: avgProductivity > 80 ? 'up' : avgProductivity > 60 ? 'stable' : 'down',
-    details: {
-      avgProductivity,
-      avgFocus,
-      topActivity: topActivity ? topActivity[0] : '未知',
-    }
+    trend: avgFocus > 80 ? 'up' : avgFocus > 60 ? 'stable' : 'down',
+    details: { avgProductivity, avgFocus, topActivity: topActivity ? topActivity[0] : '未知' }
   };
 
-  if (avgProductivity >= 80) {
-    insights.overall = `✨ 工作状态优秀！效率 ${avgProductivity}%，专注度 ${avgFocus}%`;
-  } else if (avgProductivity >= 60) {
-    insights.overall = `📊 工作状态良好，效率 ${avgProductivity}%`;
-  } else {
-    insights.overall = `⚠️ 效率偏低 (${avgProductivity}%)`;
+  if (lowFocusCount > records.length * 0.3) {
+    insights.suggestions.push(`🎯 有 ${lowFocusCount} 次记录专注度偏低，注意减少干扰`);
   }
-
-  if (hasFocusIssue) {
-    insights.suggestions.push(`🎯 专注度预警：最近 ${lowFocusCount} 次记录显示专注度不足`);
-  }
-  
   if (topActivity && topActivity[1] > records.length * 0.4) {
-    insights.suggestions.push(`📈 主要活动：${topActivity[0]} (${topActivity[1]} 次)`);
+    insights.suggestions.push(`📈 主要活动：${topActivity[0]}`);
   }
-  
-  if (avgFocus < 70) {
-    insights.suggestions.push('💡 建议使用番茄工作法');
-  }
-
   if (hour >= 9 && hour <= 11) insights.suggestions.push('🌅 上午黄金时间');
   else if (hour >= 14 && hour <= 17) insights.suggestions.push('☕ 下午适当休息');
-  else if (hour >= 18) insights.suggestions.push('🌙 注意休息');
 
   return insights;
 }
@@ -320,37 +472,49 @@ async function captureAndAnalyze() {
         const filename = `screenshot_${Date.now()}.png`;
         filepath = path.join(CONFIG.screenshotDir, filename);
         fs.writeFileSync(filepath, imgBuffer);
-      } catch (e) {
-        console.log('截屏失败:', e.message);
-      }
+      } catch (e) { console.log('截屏失败:', e.message); }
     }
     
     const timestamp = new Date().toISOString();
     let analysis;
+    let focusDetails = {};
+    
+    // 使用科学方法计算专注度
+    const focusResult = focusCalculator.calculate(filepath, '分析中', timestamp);
+    const aiFocus = focusResult ? focusResult.focusScore : null;
+    focusDetails = { factors: focusResult?.factors || [], method: 'image_analysis' };
     
     if (filepath && fs.existsSync(filepath)) {
-      analysis = await analyzeScreenshot(filepath);
+      const aiResult = await analyzeScreenshot(filepath);
+      analysis = aiResult;
+      // 融合 AI 分析和本地计算
+      if (aiFocus) {
+        // AI 分析权重 60%，本地计算权重 40%
+        analysis.focus_score = Math.round(analysis.focus_score * 0.6 + aiFocus * 0.4);
+        focusDetails.method = 'hybrid';
+      }
     } else {
       analysis = generateMockAnalysis();
     }
     
     analysis.timestamp = timestamp;
+    analysis.focus_factors = JSON.stringify(focusDetails);
     
-    db.prepare('INSERT INTO work_records (status, activity, productivity, timestamp, detail, focus_score) VALUES (?, ?, ?, ?, ?, ?)')
-      .run(analysis.status, analysis.activity, analysis.productivity, timestamp, analysis.detail || '', analysis.focus_score || analysis.productivity);
+    db.prepare('INSERT INTO work_records (status, activity, productivity, timestamp, detail, focus_score, focus_factors) VALUES (?, ?, ?, ?, ?, ?, ?)')
+      .run(analysis.status, analysis.activity, analysis.productivity, timestamp, analysis.detail || '', analysis.focus_score || analysis.productivity, JSON.stringify(focusDetails));
     
     db.prepare('DELETE FROM work_records WHERE id NOT IN (SELECT id FROM work_records ORDER BY timestamp DESC LIMIT 1000)').run();
     
     if (filepath && fs.existsSync(filepath)) {
+      focusCalculator.updateLastScreenshot(filepath);
       try { fs.unlinkSync(filepath); } catch (e) { }
     }
     
     const totalCaptures = db.prepare('SELECT COUNT(*) as count FROM work_records').get().count;
     db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('lastCapture', JSON.stringify(timestamp));
-    db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('totalCaptures', JSON.stringify(totalCaptures));
     
     const mode = filepath ? '📸' : '🎭';
-    console.log(`[${format(new Date(), 'HH:mm:ss')}] ${mode} ${analysis.status} | ${analysis.activity} | 效率:${analysis.productivity}% 专注:${analysis.focus_score || analysis.productivity}%`);
+    console.log(`[${format(new Date(), 'HH:mm:ss')}] ${mode} 专注:${analysis.focus_score}% 效率:${analysis.productivity}% | ${analysis.activity}`);
     
     return analysis;
   } catch (error) {
@@ -359,14 +523,11 @@ async function captureAndAnalyze() {
   }
 }
 
-// API Routes
 app.get('/api/status', (req, res) => {
   const latest = db.prepare('SELECT * FROM work_records ORDER BY timestamp DESC LIMIT 1').get();
   const totalCaptures = db.prepare('SELECT COUNT(*) as count FROM work_records').get().count;
   const lastCapture = db.prepare("SELECT value FROM settings WHERE key = 'lastCapture'").get();
   const monitoring = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'monitoring'").get()?.value || 'false');
-  
-  // 获取最后一次会话总结
   const lastSummary = db.prepare('SELECT * FROM session_summary ORDER BY end_time DESC LIMIT 1').get();
   
   res.json({
@@ -387,7 +548,6 @@ app.get('/api/history', (req, res) => {
   res.json({ records, total, limit, offset });
 });
 
-// 获取会话总结列表
 app.get('/api/sessions', (req, res) => {
   const limit = parseInt(req.query.limit) || 10;
   const offset = parseInt(req.query.offset) || 0;
@@ -407,15 +567,12 @@ app.post('/api/screenshot', async (req, res) => {
 
 app.get('/api/insights', (req, res) => {
   const insights = generateInsights();
-  const records = db.prepare('SELECT * FROM work_records ORDER BY timestamp DESC LIMIT 20').all();
   const todayRecords = db.prepare("SELECT COUNT(*) as count FROM work_records WHERE date(timestamp) = date('now')").get().count;
-  const avgProductivity = records.length > 0 ? Math.round(records.reduce((sum, r) => sum + r.productivity, 0) / records.length) : 0;
-  const avgFocus = records.length > 0 ? Math.round(records.reduce((sum, r) => sum + (r.focus_score || r.productivity), 0) / records.length) : 0;
   
   const stats = {
     totalHours: (db.prepare('SELECT COUNT(*) as count FROM work_records').get().count * 5) / 3600,
-    avgProductivity,
-    avgFocus,
+    avgProductivity: insights.details.avgProductivity,
+    avgFocus: insights.details.avgFocus,
     todayRecords,
     totalCaptures: db.prepare('SELECT COUNT(*) as count FROM work_records').get().count,
   };
@@ -426,9 +583,7 @@ app.get('/api/insights', (req, res) => {
 app.get('/api/settings', (req, res) => {
   const rows = db.prepare('SELECT key, value FROM settings').all();
   const settings = {};
-  for (const row of rows) {
-    settings[row.key] = JSON.parse(row.value);
-  }
+  for (const row of rows) { settings[row.key] = JSON.parse(row.value); }
   res.json(settings);
 });
 
@@ -441,55 +596,29 @@ app.put('/api/settings', (req, res) => {
   
   if (monitoring !== undefined) {
     const wasMonitoring = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'monitoring'").get()?.value || 'false');
-    const lastSessionStart = db.prepare("SELECT value FROM settings WHERE key = 'lastSessionStart'").get();
-    sessionStartTime = lastSessionStart ? JSON.parse(lastSessionStart.value) : null;
     
     db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('monitoring', JSON.stringify(monitoring));
     
-    if (monitorInterval) {
-      clearInterval(monitorInterval);
-      monitorInterval = null;
-    }
+    if (monitorInterval) { clearInterval(monitorInterval); monitorInterval = null; }
     
     if (monitoring) {
-      // 开始新会话
       sessionStartTime = new Date().toISOString();
       db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('lastSessionStart', JSON.stringify(sessionStartTime));
-      
       captureAndAnalyze();
       const interval = JSON.parse(db.prepare("SELECT value FROM settings WHERE key = 'captureInterval'").get()?.value || '5000');
       monitorInterval = setInterval(captureAndAnalyze, interval);
-      console.log(`🟢 监控已启动，间隔: ${interval/1000}秒，会话开始: ${sessionStartTime}`);
+      console.log(`🟢 监控已启动，间隔: ${interval/1000}秒`);
     } else if (wasMonitoring && sessionStartTime) {
-      // 停止监控，生成会话总结
       const endTime = new Date().toISOString();
       const summary = generateSessionSummary(sessionStartTime, endTime);
-      
       if (summary && summary.total_records > 0) {
-        db.prepare(`
-          INSERT INTO session_summary (start_time, end_time, duration_minutes, total_records, avg_productivity, avg_focus, main_activity, summary, suggestions)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        `).run(
-          summary.start_time,
-          summary.end_time,
-          summary.duration_minutes,
-          summary.total_records,
-          summary.avg_productivity,
-          summary.avg_focus,
-          summary.main_activity,
-          summary.summary,
-          summary.suggestions
-        );
-        
-        console.log(`📊 会话总结已生成：${summary.summary}`);
+        db.prepare(`INSERT INTO session_summary (start_time, end_time, duration_minutes, total_records, avg_productivity, avg_focus, main_activity, summary, suggestions) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`)
+          .run(summary.start_time, summary.end_time, summary.duration_minutes, summary.total_records, summary.avg_productivity, summary.avg_focus, summary.main_activity, summary.summary, summary.suggestions);
       }
-      
       sessionStartTime = null;
-      db.prepare('INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)').run('lastSessionStart', JSON.stringify(null));
       console.log('🔴 监控已停止');
     }
   }
-  
   res.json({ success: true });
 });
 
@@ -498,9 +627,11 @@ app.get('/api/health', (req, res) => res.json({
   timestamp: new Date().toISOString(),
   openaiConfigured: !!openai,
   realScreenshot: !!screenshot,
+  focusMethod: 'hybrid',
 }));
 
 app.listen(PORT, () => {
   console.log(`\n🤖 WatchBot Server http://localhost:${PORT}`);
+  console.log(`📊 专注度计算: 混合模式 (AI + 图像分析 + 行为分析)`);
   console.log(`📁 数据库: ${CONFIG.dbPath}\n`);
 });
