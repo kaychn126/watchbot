@@ -8,21 +8,7 @@ on:
 
 jobs:
   build:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - platform: 'macos-latest'
-            target: 'aarch64-apple-darwin'
-            arch: 'aarch64'
-          - platform: 'macos-latest'
-            target: 'x86_64-apple-darwin'
-            arch: 'x86_64'
-          - platform: 'windows-latest'
-            target: 'x86_64-pc-windows-msvc'
-            arch: 'x64'
-
-    runs-on: ${{ matrix.platform }}
+    runs-on: windows-latest
 
     steps:
       - name: Checkout repository
@@ -33,33 +19,25 @@ jobs:
         with:
           node-version: '20'
 
-      - name: Install Rust stable
-        uses: dtolnay/rust-action@stable
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
-      - name: Install dependencies (Ubuntu)
-        if: matrix.platform == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libgtk-3-dev libwebkit2gtk-4.0-dev libappindicator3-dev librsvg2-dev patchelf libxdo-dev
+      - name: Install Tauri CLI
+        run: npm install -g @tauri-apps/cli@latest
 
       - name: Install frontend dependencies
         run: cd watchbot-tauri && npm install
 
       - name: Build Tauri app
-        uses: tauri-apps/tauri-action@v0
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        with:
-          args: --target ${{ matrix.target }}
+        run: cd watchbot-tauri && npm run build
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: watchbot-${{ matrix.platform }}-${{ matrix.arch }}
+          name: watchbot-windows
           path: |
             watchbot-tauri/src-tauri/target/release/bundle/**/*.msi
             watchbot-tauri/src-tauri/target/release/bundle/**/*.exe
-            watchbot-tauri/src-tauri/target/release/bundle/**/*.dmg
           if-no-files-found: ignore
 
   release:
@@ -68,7 +46,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/v')
 
     steps:
-      - name: Download all artifacts
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -78,7 +56,5 @@ jobs:
         with:
           files: artifacts/**/*
           draft: false
-          prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
