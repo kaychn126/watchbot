@@ -1,0 +1,480 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>WatchBot - AI 工作状态监控</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: linear-gradient(135deg, #0f172a 0%, #1e293b 100%);
+      min-height: 100vh;
+      color: #f1f5f9;
+    }
+    .container { max-width: 1200px; margin: 0 auto; padding: 2rem; }
+    
+    header {
+      display: flex; justify-content: space-between; align-items: center; margin-bottom: 2rem;
+    }
+    h1 { font-size: 2rem; display: flex; align-items: center; gap: 0.5rem; }
+    .logo { color: #34d399; }
+    
+    .controls { display: flex; gap: 1rem; align-items: center; }
+    button {
+      padding: 0.6rem 1.2rem; border-radius: 0.5rem; border: 1px solid #475569;
+      background: #334155; color: #cbd5e1; cursor: pointer; font-size: 0.875rem;
+      transition: all 0.2s;
+    }
+    button:hover { background: #475569; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #34d399; color: #0f172a; border: none; font-weight: 600; }
+    .btn-primary:hover { background: #22c55e; }
+    
+    .toggle {
+      display: flex; align-items: center; gap: 0.5rem;
+      background: #334155; padding: 0.5rem 1rem; border-radius: 0.5rem;
+    }
+    .toggle-switch {
+      width: 44px; height: 24px; background: #475569; border-radius: 12px;
+      position: relative; cursor: pointer; transition: background 0.2s;
+    }
+    .toggle-switch.active { background: #34d399; }
+    .toggle-switch::after {
+      content: ''; position: absolute; width: 18px; height: 18px;
+      background: white; border-radius: 50%; top: 3px; left: 3px;
+      transition: transform 0.2s;
+    }
+    .toggle-switch.active::after { transform: translateX(20px); }
+    
+    .stats-grid {
+      display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+      gap: 1rem; margin-bottom: 2rem;
+    }
+    .stat-card {
+      background: #1e293b; border: 1px solid #334155; border-radius: 0.75rem;
+      padding: 1.25rem;
+    }
+    .stat-card h3 { color: #94a3b8; font-size: 0.8rem; font-weight: 500; margin-bottom: 0.5rem; text-transform: uppercase; }
+    .stat-card .value { font-size: 1.5rem; font-weight: 700; }
+    .stat-card .sub { font-size: 0.75rem; color: #64748b; margin-top: 0.25rem; }
+    
+    .status-active { color: #34d399; }
+    .status-normal { color: #60a5fa; }
+    .status-distract { color: #fbbf24; }
+    .status-rest { color: #94a3b8; }
+    
+    .progress-bar {
+      width: 100%; height: 8px; background: #334155; border-radius: 4px;
+      margin-top: 0.5rem; overflow: hidden;
+    }
+    .progress-fill { height: 100%; background: #34d399; border-radius: 4px; transition: width 0.3s; }
+    .progress-yellow { background: #fbbf24; }
+    .progress-red { background: #f87171; }
+    
+    .card {
+      background: #1e293b; border: 1px solid #334155; border-radius: 0.75rem;
+      padding: 1.5rem; margin-bottom: 1.5rem;
+    }
+    .card h2 { font-size: 1.1rem; margin-bottom: 1rem; display: flex; align-items: center; gap: 0.5rem; }
+    
+    .summary-card {
+      background: linear-gradient(135deg, #1e293b 0%, #334155 100%);
+      border: 1px solid #34d39950;
+      border-radius: 0.75rem;
+      padding: 1.5rem;
+      margin-bottom: 1.5rem;
+    }
+    .summary-card h2 { color: #34d399; font-size: 1.1rem; margin-bottom: 1rem; }
+    .summary-content { font-size: 0.95rem; line-height: 1.6; }
+    .summary-meta {
+      display: flex; gap: 1.5rem; margin-top: 1rem; padding-top: 1rem;
+      border-top: 1px solid #475569; font-size: 0.85rem; color: #94a3b8;
+    }
+    .summary-suggestions {
+      margin-top: 1rem; padding: 1rem; background: #0f172a50; border-radius: 0.5rem;
+      font-size: 0.85rem; color: #cbd5e1;
+    }
+    
+    .history-item {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 0.75rem; background: #0f172a50; border-radius: 0.5rem; margin-bottom: 0.5rem;
+    }
+    .history-item .activity { display: flex; align-items: center; gap: 0.5rem; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; }
+    .dot-green { background: #34d399; }
+    .dot-blue { background: #60a5fa; }
+    .dot-yellow { background: #fbbf24; }
+    .dot-gray { background: #94a3b8; }
+    .history-item .info { display: flex; gap: 1.5rem; align-items: center; font-size: 0.875rem; }
+    .history-item .time { color: #64748b; }
+    .history-item .detail { font-size: 0.75rem; color: #94a3b8; }
+    
+    .session-item {
+      padding: 1rem; background: #0f172a50; border-radius: 0.5rem; margin-bottom: 1rem;
+    }
+    .session-item .header {
+      display: flex; justify-content: space-between; align-items: center; margin-bottom: 0.5rem;
+    }
+    .session-item .time { font-size: 0.8rem; color: #64748b; }
+    .session-item .duration { font-weight: 600; color: #34d399; }
+    .session-item .summary { font-size: 0.9rem; margin: 0.5rem 0; }
+    .session-item .stats {
+      display: flex; gap: 1rem; font-size: 0.8rem; color: #94a3b8;
+    }
+    .session-item .suggestions {
+      margin-top: 0.5rem; padding: 0.5rem; background: #0f172a; border-radius: 0.3rem;
+      font-size: 0.8rem; color: #cbd5e1;
+    }
+    
+    .suggestion-tag {
+      display: inline-block; padding: 0.25rem 0.5rem; margin: 0.25rem;
+      background: #34d39920; border: 1px solid #34d39930;
+      border-radius: 0.3rem; font-size: 0.8rem; color: #6ee7b7;
+    }
+    .suggestion-tag.warning { background: #fbbf2420; border-color: #fbbf2430; color: #fcd34d; }
+    
+    .loading { text-align: center; padding: 2rem; color: #64748b; }
+    .error { background: #dc262615; border: 1px solid #dc2626; padding: 1rem; border-radius: 0.5rem; color: #f87171; margin-bottom: 1rem; }
+    
+    .tabs { display: flex; gap: 0.5rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+    .tab {
+      padding: 0.6rem 1.2rem; border-radius: 0.5rem; background: #334155;
+      color: #cbd5e1; border: none; cursor: pointer; font-size: 0.875rem;
+    }
+    .tab:hover { background: #475569; }
+    .tab.active { background: #34d399; color: #0f172a; font-weight: 600; }
+    
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    
+    .empty-state { text-align: center; padding: 3rem; color: #64748b; }
+    .empty-state .icon { font-size: 3rem; margin-bottom: 1rem; }
+    
+    @media (max-width: 768px) {
+      .container { padding: 1rem; }
+      header { flex-direction: column; gap: 1rem; align-items: flex-start; }
+      .controls { width: 100%; justify-content: space-between; }
+      .stats-grid { grid-template-columns: 1fr 1fr; }
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1><span class="logo">◉</span> WatchBot</h1>
+      <div class="controls">
+        <button id="captureBtn">📸 截屏</button>
+        <div class="toggle">
+          <span id="statusText">已暂停</span>
+          <div class="toggle-switch" id="monitorToggle"></div>
+        </div>
+      </div>
+    </header>
+    
+    <div id="error" class="error" style="display:none"></div>
+    
+    <!-- 最后会话总结 -->
+    <div id="lastSummarySection" style="display:none">
+      <div class="summary-card">
+        <h2>📊 上次工作会话总结</h2>
+        <div class="summary-content" id="lastSummaryContent"></div>
+        <div class="summary-meta" id="lastSummaryMeta"></div>
+        <div class="summary-suggestions" id="lastSummarySuggestions"></div>
+      </div>
+    </div>
+    
+    <div class="stats-grid">
+      <div class="stat-card">
+        <h3>当前状态</h3>
+        <div class="value" id="currentStatus">-</div>
+        <div class="sub" id="currentActivity">等待数据</div>
+        <div class="sub" id="currentDetail" style="color:#64748b;font-size:0.7rem;margin-top:0.5rem"></div>
+      </div>
+      <div class="stat-card">
+        <h3>效率评分</h3>
+        <div class="value" id="productivity">-</div>
+        <div class="progress-bar"><div class="progress-fill" id="productivityBar" style="width:0%"></div></div>
+        <div class="sub">专注度 <span id="focusScore">-</span>%</div>
+      </div>
+      <div class="stat-card">
+        <h3>今日记录</h3>
+        <div class="value" id="todayRecords">0</div>
+        <div class="sub">平均效率 <span id="avgProductivity">0</span>%</div>
+      </div>
+      <div class="stat-card">
+        <h3>总会话数</h3>
+        <div class="value" id="totalSessions">0</div>
+        <div class="sub">总时长 <span id="totalHours">0</span> 小时</div>
+      </div>
+    </div>
+    
+    <div class="tabs">
+      <button class="tab active" data-tab="dashboard">仪表盘</button>
+      <button class="tab" data-tab="history">历史记录</button>
+      <button class="tab" data-tab="sessions">会话总结</button>
+      <button class="tab" data-tab="insights">优化建议</button>
+    </div>
+    
+    <div class="tab-content active" id="tab-dashboard">
+      <div class="card">
+        <h2>📈 最近活动</h2>
+        <div id="recentHistory"><div class="loading">加载中...</div></div>
+      </div>
+    </div>
+    
+    <div class="tab-content" id="tab-history">
+      <div class="card">
+        <h2>📜 完整历史</h2>
+        <div id="fullHistory"><div class="loading">加载中...</div></div>
+      </div>
+    </div>
+    
+    <div class="tab-content" id="tab-sessions">
+      <div class="card">
+        <h2>📊 历史会话总结</h2>
+        <div id="sessionList"><div class="loading">加载中...</div></div>
+      </div>
+    </div>
+    
+    <div class="tab-content" id="tab-insights">
+      <div class="card">
+        <h2>💡 整体评估</h2>
+        <div id="overall" class="loading">加载中...</div>
+      </div>
+      <div class="card">
+        <h2>🎯 优化建议</h2>
+        <div id="suggestionsList"><div class="loading">加载中...</div></div>
+      </div>
+    </div>
+  </div>
+  
+  <script>
+    const API = 'http://localhost:3001/api';
+    let monitoring = false;
+    
+    function getStatusClass(status) {
+      if (status === '高效工作') return 'status-active';
+      if (status === '普通工作') return 'status-normal';
+      if (status === '严重分心') return 'status-distract';
+      return 'status-rest';
+    }
+    
+    function getStatusColor(status) {
+      if (status === '高效工作') return '#34d399';
+      if (status === '普通工作') return '#60a5fa';
+      if (status === '严重分心') return '#fbbf24';
+      return '#94a3b8';
+    }
+    
+    function getDotClass(status) {
+      if (status === '高效工作') return 'dot-green';
+      if (status === '普通工作') return 'dot-blue';
+      if (status === '严重分心') return 'dot-yellow';
+      return 'dot-gray';
+    }
+    
+    function getProgressClass(score) {
+      if (score >= 80) return '';
+      if (score >= 60) return 'progress-yellow';
+      return 'progress-red';
+    }
+    
+    async function fetchJSON(url) {
+      const res = await fetch(url);
+      if (!res.ok) throw new Error(res.statusText);
+      return res.json();
+    }
+    
+    async function loadData() {
+      try {
+        const [status, insights] = await Promise.all([
+          fetchJSON(API + '/status'),
+          fetchJSON(API + '/insights')
+        ]);
+        
+        monitoring = status.monitoring;
+        document.getElementById('monitorToggle').classList.toggle('active', monitoring);
+        document.getElementById('statusText').textContent = monitoring ? '监控中' : '已暂停';
+        
+        // 最后会话总结
+        if (status.lastSummary) {
+          document.getElementById('lastSummarySection').style.display = 'block';
+          document.getElementById('lastSummaryContent').textContent = status.lastSummary.summary;
+          
+          const startTime = new Date(status.lastSummary.start_time).toLocaleString('zh-CN');
+          const duration = status.lastSummary.duration_minutes;
+          document.getElementById('lastSummaryMeta').innerHTML = `
+            <span>📅 ${startTime}</span>
+            <span>⏱️ ${duration} 分钟</span>
+            <span>📊 效率 ${status.lastSummary.avg_productivity}%</span>
+            <span>🎯 专注 ${status.lastSummary.avg_focus}%</span>
+          `;
+          document.getElementById('lastSummarySuggestions').textContent = '💡 ' + status.lastSummary.suggestions;
+        } else {
+          document.getElementById('lastSummarySection').style.display = 'none';
+        }
+        
+        if (status.currentStatus) {
+          document.getElementById('currentStatus').textContent = status.currentStatus.status;
+          document.getElementById('currentStatus').className = 'value ' + getStatusClass(status.currentStatus.status);
+          document.getElementById('currentActivity').textContent = status.currentStatus.activity;
+          document.getElementById('currentDetail').textContent = status.currentStatus.detail || '';
+          document.getElementById('productivity').textContent = status.currentStatus.productivity;
+          document.getElementById('focusScore').textContent = status.currentStatus.focus_score || status.currentStatus.productivity;
+          
+          const prodBar = document.getElementById('productivityBar');
+          prodBar.style.width = status.currentStatus.productivity + '%';
+          prodBar.className = 'progress-fill ' + getProgressClass(status.currentStatus.productivity);
+        }
+        
+        document.getElementById('todayRecords').textContent = insights.stats.todayRecords;
+        document.getElementById('avgProductivity').textContent = insights.stats.avgProductivity;
+        
+        // 获取总会话数
+        const sessionsData = await fetchJSON(API + '/sessions?limit=100');
+        document.getElementById('totalSessions').textContent = sessionsData.total;
+        const totalMins = sessionsData.sessions.reduce((sum, s) => sum + s.duration_minutes, 0);
+        document.getElementById('totalHours').textContent = (totalMins / 60).toFixed(1);
+        
+        // 加载历史
+        const history = await fetchJSON(API + '/history?limit=20');
+        renderHistory(history.records);
+        
+        // 加载会话列表
+        renderSessions(sessionsData.sessions);
+        
+        // 加载建议
+        renderInsights(insights);
+        
+        document.getElementById('error').style.display = 'none';
+      } catch (e) {
+        document.getElementById('error').textContent = '连接失败: ' + e.message;
+        document.getElementById('error').style.display = 'block';
+      }
+    }
+    
+    function renderHistory(records) {
+      const html = records.slice().reverse().map(r => `
+        <div class="history-item">
+          <div class="activity">
+            <span class="dot ${getDotClass(r.status)}"></span>
+            <span>${r.activity}</span>
+          </div>
+          <div class="info">
+            <span class="${getStatusClass(r.status)}">${r.status}</span>
+            <span class="time">${new Date(r.timestamp).toLocaleTimeString('zh-CN')}</span>
+          </div>
+        </div>
+        ${r.detail ? `<div class="history-item .detail" style="padding-top:0;color:#64748b;font-size:0.75rem">${r.detail}</div>` : ''}
+      `).join('');
+      
+      const emptyHtml = '<div class="empty-state"><div class="icon">📊</div><p>暂无记录</p></div>';
+      document.getElementById('recentHistory').innerHTML = html || emptyHtml;
+      document.getElementById('fullHistory').innerHTML = html || emptyHtml;
+    }
+    
+    function renderSessions(sessions) {
+      if (sessions.length === 0) {
+        document.getElementById('sessionList').innerHTML = '<div class="empty-state"><div class="icon">📊</div><p>暂无会话记录</p><p style="font-size:0.8rem;margin-top:0.5rem">启动监控后点击停止，会生成会话总结</p></div>';
+        return;
+      }
+      
+      const html = sessions.map(s => {
+        const startTime = new Date(s.start_time).toLocaleString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' });
+        return `
+          <div class="session-item">
+            <div class="header">
+              <span class="time">${startTime}</span>
+              <span class="duration">${s.duration_minutes} 分钟</span>
+            </div>
+            <div class="summary">${s.summary}</div>
+            <div class="stats">
+              <span>效率: ${s.avg_productivity}%</span>
+              <span>专注: ${s.avg_focus}%</span>
+              ${s.main_activity ? `<span>主要: ${s.main_activity}</span>` : ''}
+              <span>记录: ${s.total_records} 条</span>
+            </div>
+            ${s.suggestions ? `<div class="suggestions">💡 ${s.suggestions}</div>` : ''}
+          </div>
+        `;
+      }).join('');
+      
+      document.getElementById('sessionList').innerHTML = html;
+    }
+    
+    function renderInsights(data) {
+      const trendIcon = data.insights.trend === 'up' ? '↗' : data.insights.trend === 'down' ? '↘' : '→';
+      
+      document.getElementById('overall').innerHTML = `
+        <div style="font-size:1.1rem;margin-bottom:1rem">${data.insights.overall}</div>
+        <div style="display:flex;align-items:center;gap:1rem">
+          <div>
+            <div style="color:#64748b;font-size:0.8rem">效率</div>
+            <div style="font-size:2rem;font-weight:bold">${data.stats.avgProductivity}<span style="font-size:1rem;color:#64748b">%</span></div>
+            <div class="progress-bar" style="width:100px"><div class="progress-fill ${getProgressClass(data.stats.avgProductivity)}" style="width:${data.stats.avgProductivity}%"></div></div>
+          </div>
+          <div>
+            <div style="color:#64748b;font-size:0.8rem">专注度</div>
+            <div style="font-size:2rem;font-weight:bold">${data.stats.avgFocus}<span style="font-size:1rem;color:#64748b">%</span></div>
+            <div class="progress-bar" style="width:100px"><div class="progress-fill ${getProgressClass(data.stats.avgFocus)}" style="width:${data.stats.avgFocus}%"></div></div>
+          </div>
+          <div style="margin-left:auto;font-size:2rem">${trendIcon}</div>
+        </div>
+      `;
+      
+      const suggestionsHtml = data.insights.suggestions.map(s => {
+        const isWarning = s.includes('预警') || s.includes('偏低') || s.includes('建议');
+        return `<span class="suggestion-tag ${isWarning ? 'warning' : ''}">${s}</span>`;
+      }).join('');
+      document.getElementById('suggestionsList').innerHTML = suggestionsHtml || '<div class="loading">收集更多数据...</div>';
+    }
+    
+    document.getElementById('captureBtn').addEventListener('click', async () => {
+      const btn = document.getElementById('captureBtn');
+      btn.disabled = true;
+      btn.textContent = '截屏中...';
+      try {
+        await fetchJSON(API + '/screenshot', { method: 'POST' });
+        await loadData();
+      } catch (e) {
+        alert('截屏失败: ' + e.message);
+      }
+      btn.disabled = false;
+      btn.textContent = '📸 截屏';
+    });
+    
+    document.getElementById('monitorToggle').addEventListener('click', async () => {
+      try {
+        await fetchJSON(API + '/settings', {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ monitoring: !monitoring })
+        });
+        monitoring = !monitoring;
+        document.getElementById('monitorToggle').classList.toggle('active', monitoring);
+        document.getElementById('statusText').textContent = monitoring ? '监控中' : '已暂停';
+        
+        // 如果停止监控，刷新数据获取新总结
+        if (!monitoring) {
+          setTimeout(loadData, 500);
+        }
+      } catch (e) {
+        alert('设置失败: ' + e.message);
+      }
+    });
+    
+    document.querySelectorAll('.tab').forEach(tab => {
+      tab.addEventListener('click', () => {
+        document.querySelectorAll('.tab').forEach(t => t.classList.remove('active'));
+        document.querySelectorAll('.tab-content').forEach(c => c.classList.remove('active'));
+        tab.classList.add('active');
+        document.getElementById('tab-' + tab.dataset.tab).classList.add('active');
+      });
+    });
+    
+    loadData();
+    setInterval(loadData, 5000);
+  </script>
+</body>
+</html>
