@@ -4,13 +4,23 @@
   "identifier": "com.watchbot.app",
   "version": "1.0.0",
   "build": {
-    "frontendDist": "../src"
+    "frontendDist": "../src",
+    "devtools": true
   },
   "app": {
-    "windows": [{ "title": "WatchBot", "width": 900, "height": 700, "center": true }]
+    "windows": [
+      {
+        "title": "WatchBot - AI工作效率分析",
+        "width": 900,
+        "height": 700,
+        "center": true,
+        "resizable": true,
+        "fullscreen": false
+      }
+    ]
   },
   "bundle": {
     "active": true,
-    "targets": ["nsis", "msi"]
+    "targets": ["nsis"]
   }
 }

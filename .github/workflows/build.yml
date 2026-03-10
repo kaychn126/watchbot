@@ -21,24 +21,35 @@ jobs:
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
 
-      - name: Install Tauri CLI
-        run: npm install -g @tauri-apps/cli@latest
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: './watchbot-tauri/src-tauri -> target'
 
-      - name: Install frontend dependencies
-        run: cd watchbot-tauri && npm install
+      - name: Install npm dependencies
+        working-directory: ./watchbot-tauri
+        run: npm install
 
       - name: Build Tauri app
-        run: cd watchbot-tauri && npm run build
+        working-directory: ./watchbot-tauri
+        run: npm run build -- --verbose
+        env:
+          TAURI_PRIVATE_KEY: ''
+          TAURI_KEY_PASSWORD: ''
+
+      - name: Find build artifacts
+        run: |
+          Get-ChildItem -Path "watchbot-tauri/src-tauri/target/release/bundle" -Recurse -File | Select -Expand FullName
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
           name: watchbot-windows
           path: |
-            watchbot-tauri/src-tauri/target/release/bundle/**/*.msi
-            watchbot-tauri/src-tauri/target/release/bundle/**/*.exe
-          if-no-files-found: ignore
+            watchbot-tauri/src-tauri/target/release/bundle/nsis/*.exe
 
   release:
     needs: build
@@ -49,12 +60,15 @@ jobs:
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          name: watchbot-windows
+
+      - name: List downloaded files
+        run: ls -la
 
       - name: Create Release
         uses: softprops/action-gh-release@v1
         with:
-          files: artifacts/**/*
+          files: "*.exe"
           draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
