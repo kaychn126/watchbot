@@ -1,9 +1,8 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 use serde::{Deserialize, Serialize};
-use std::fs;
 use std::sync::Mutex;
-use tauri::{Manager, State};
+use tauri::State;
 
 struct AppState {
     monitoring: Mutex<bool>,
@@ -24,7 +23,7 @@ fn get_status(state: State<AppState>) -> serde_json::Value {
     let monitoring = *state.monitoring.lock().unwrap();
     serde_json::json!({
         "monitoring": monitoring,
-        "currentStatus": null,
+        "currentStatus": None,
         "totalRecords": 0
     })
 }
@@ -38,12 +37,13 @@ fn toggle_monitoring(state: State<AppState>) -> bool {
 
 #[tauri::command]
 fn trigger_screenshot() -> Result<WorkRecord, String> {
+    let now = chrono::Utc::now();
     Ok(WorkRecord {
         id: 1,
         status: "普通工作".to_string(),
         activity: "Coding".to_string(),
         productivity: 80,
-        timestamp: chrono::Utc::now().to_rfc3339(),
+        timestamp: now.to_rfc3339(),
         focus_score: 75,
     })
 }
@@ -51,8 +51,8 @@ fn trigger_screenshot() -> Result<WorkRecord, String> {
 fn main() {
     tauri::Builder::default()
         .manage(AppState { monitoring: Mutex::new(false) })
-        .setup(|app| {
-            println!("WatchBot Tauri starting...");
+        .setup(|_app| {
+            println!("WatchBot starting...");
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
